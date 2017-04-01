@@ -1,0 +1,244 @@
+#!/bin/bash
+### BEGIN INIT INFO
+# Provides:          nimf
+# Required-Start:    $all
+# Required-Stop:     $all
+# Default-Start:     2 3 4 5
+# Default-Stop:      0 1 6
+### END INIT INFO
+#
+# Nimf-Initscript
+#   Initscript for Nimf.
+#   Last updated on April 2, 2017.
+#   Written by Jongmin Kim <jmkim@pukyong.ac.kr>.
+#   https://github.com/kdzlvaids/nimf-initscript
+#
+# Nimf
+#   Nimf is an input method framework which has a module-based client-server
+#   architecture in which an application acts as a client and communicates
+#   synchronously with the Nimf server via a Unix socket.
+#   https://github.com/cogniti/nimf
+#
+
+# Script file name (this script's name)
+# Default value: "nimf"
+SCRIPT_NAME="nimf"
+
+# Nimf daemon name
+# Default value: "nimf-daemon"
+NIMF_DAEMON_NAME="nimf-daemon"
+
+# Nimf daemon's location (binary path)
+# Default value: "/usr/bin/$NIMF_DAEMON_NAME"
+NIMF_DAEMON_LOCATION="/usr/bin/$NIMF_DAEMON_NAME"
+
+# PID directory
+# Default value: "/var/run"
+PID_DIR="/var/run"
+
+# PID file location
+# Default value: "$PID_DIR/$SCRIPT_NAME.pid"
+PID_FILE="$PID_DIR/$SCRIPT_NAME.pid"
+
+# Error codes
+# Ref: http://refspecs.linuxbase.org/LSB_3.0.0/LSB-PDA/LSB-PDA/iniscrptact.html
+SUCCESS=0
+ERROR_GENERIC=1
+ERROR_INVALID_ARGUMENTS=2
+ERROR_NOT_IMPLEMENTED=3
+ERROR_PREVILEGE=4
+ERROR_NOT_INSTALLED=5
+ERROR_NOT_CONFIGURED=6
+ERROR_NOT_RUNNING=7
+
+create_pid() {
+    echo $1 2>/dev/null > $PID_FILE
+    if [[ $? -eq 0 ]]; then
+        return 0 # Success
+    else
+        return 1 # Failure
+    fi
+}
+
+remove_pid() {
+    rm $PID_FILE
+    if [[ $? -eq 0 ]]; then
+        return 0 # Success
+    else
+        return 1 # Failure
+    fi
+}
+
+check_is_running() {
+    kill -0 $(cat $PID_FILE 2>/dev/null) 2>/dev/null
+    if [[ $? -eq 0 ]]; then
+        return 1 # Running
+    else
+        return 0 # Not running
+    fi
+}
+
+check_is_pid_exist() {
+    if [[ -e $PID_FILE  ]]; then
+        return 1 # Exist
+    else
+        return 0 # Not exist
+    fi
+}
+
+check_is_pid_writable() {
+    if [[ -w $PID_FILE  ]]; then
+        return 1 # Writable
+    else
+        create_pid -1
+        if [[ $? -ne 0 ]]; then
+            return 0 # Unwritable
+        fi
+        remove_pid
+
+        return 1 # Writable
+    fi
+}
+
+check_is_previleged() {
+    check_is_pid_writable
+    PID_WRITABLE=$?
+
+    if [[ $PID_WRITABLE -ne 1 ]]; then
+        return 0 # Not enough previlege
+    else
+        return 1 # Previleged
+    fi
+}
+
+check_is_configured() {
+    if [[ ! -d $PID_DIR ]]; then
+        return 0 # Not configured
+    else
+        return 1 # Configured
+    fi
+}
+
+check_is_installed() {
+    if [[ ! -x $NIMF_DAEMON_LOCATION ]]; then
+        return 0 # Not installed
+    else
+        return 1 # Installed
+    fi
+}
+
+do_status() {
+    check_is_running
+    RUNNING=$?
+
+    check_is_pid_exist
+    PID_EXIST=$?
+
+    if [[ $RUNNING -eq 1 ]]; then
+        return 0 # Programme is running
+    else
+        if [[ $PID_EXIST -eq 1 ]]; then
+            return 1 # Programme is dead and /var/run pid file exists
+        else
+            return 3 # Programme is not running
+        fi
+    fi
+}
+
+do_start() {
+    do_status
+    STATUS=$?
+
+    if [[ $STATUS -eq 0 ]]; then
+        return $SUCCESS
+    else
+        if [[ $STATUS -eq 1 ]]; then
+            remove_pid
+        fi
+
+        $NIMF_DAEMON_LOCATION
+        ERRORCODE=$?
+        PID=$(ps x | grep "[n]imf-daemon" | awk '{print $1}')
+
+        if [[ $ERRORCODE -ne 0 ]]; then
+            return $ERROR_GENERIC # nimf-daemon threw an errorcode
+        fi
+
+        create_pid $PID
+        return $SUCCESS
+    fi
+}
+
+do_stop() {
+    do_status
+    STATUS=$?
+
+    if [[ $STATUS -eq 3 ]]; then
+        return $SUCCESS
+    elif [[ $STATUS -eq 1 ]]; then
+        remove_pid
+        return $SUCCESS
+    else
+        kill $(cat $PID_FILE)
+        if [[ $? -ne 0 ]]; then
+            return $ERROR_GENERIC # Cannot kill with PID (maybe previlege)
+        fi
+
+        remove_pid
+        return $SUCCESS
+    fi
+}
+
+do_restart() {
+    do_stop
+    do_start
+    return $?
+}
+
+# First step: Check if is Nimf installed
+check_is_installed
+if [[ $? -ne 1 ]]; then
+    exit $ERROR_NOT_INSTALLED
+fi
+
+# Second step: Check if is fully configured
+check_is_configured
+if [[ $? -ne 1 ]]; then
+    exit $ERROR_NOT_CONFIGURED
+fi
+
+# Third step: Check if is fully previleged
+case "$1" in
+    start|stop|try-restart|restart|force-reload)
+        check_is_previleged
+        if [[ $? -eq 0 ]]; then
+            exit $ERROR_PREVILEGE
+        fi
+    ;;
+esac
+
+# Last (main) step: Run the command
+case "$1" in
+    status)
+        do_status
+        exit $?
+    ;;
+    try-restart|restart|force-reload)
+        do_restart
+        exit $?
+    ;;
+    start)
+        do_start
+        exit $?
+    ;;
+    stop)
+        do_stop
+        exit $?
+    ;;
+    reload)
+        exit $ERROR_NOT_IMPLEMENTED
+    ;;
+    *)
+        exit $ERROR_INVALID_ARGUMENTS
+    ;;
+esac
